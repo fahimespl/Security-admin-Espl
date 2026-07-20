@@ -9,6 +9,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./esamyak.db")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # For SQLite: check_same_thread=False is required for FastAPI's async usage
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
