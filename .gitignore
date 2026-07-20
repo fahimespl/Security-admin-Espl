@@ -1,0 +1,38 @@
+# v0 sandbox internal files
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+.snowflake/
+.v0-trash/
+.vercel/
+
+# Environment variables
+.env*.local
+.env
+backend/.env
+frontend/.env
+frontend/.env.local
+**/.*.local
+**/.env
+**/.env.*
+
+# Common ignores
+node_modules/
+.next/
+.DS_Store
+
+# Backend (Python)
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/storage/photos/*
+backend/storage/snapshots/*
+!backend/storage/**/.gitkeep
+backend/diag_frame.jpg
+
+# IDEs
+.vscode/
+.idea/
