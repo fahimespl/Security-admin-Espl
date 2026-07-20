@@ -1,13 +1,13 @@
 """
 Staff router — CRUD + face enrollment.
 
-POST /api/staff accepts multipart form with a face photo.
-The face embedding is computed and stored alongside the photo.
+POST   /api/staff            — create staff member with optional photo upload
+PATCH  /api/staff/{id}       — update fields and/or replace photo
+DELETE /api/staff/{id}       — remove staff member and their stored photo
 """
 
 import os
 import uuid
-import shutil
 from datetime import date
 from typing import List
 
@@ -18,18 +18,21 @@ from database import get_db
 from models.staff import Staff
 from schemas.staff import StaffOut
 from services.face_recognition_service import compute_embedding
+from services.storage_service import upload_photo, delete_photo
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
-
-STORAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage", "photos")
-os.makedirs(STORAGE_DIR, exist_ok=True)
 
 
 def _staff_to_out(s: Staff) -> dict:
     """Convert a Staff ORM row to a dict matching StaffOut / frontend shape."""
     photo_url = None
     if s.photo_path:
-        photo_url = f"/storage/photos/{os.path.basename(s.photo_path)}"
+        if s.photo_path.startswith("http"):
+            # Supabase public URL — return as-is
+            photo_url = s.photo_path
+        else:
+            # Legacy local path or relative URL
+            photo_url = f"/storage/photos/{os.path.basename(s.photo_path)}"
     return {
         "id": s.id,
         "name": s.name,
@@ -62,17 +65,15 @@ async def create_staff(
     if photo and photo.filename:
         ext = os.path.splitext(photo.filename)[1] or ".jpg"
         filename = f"{staff_id}{ext}"
-        file_path = os.path.join(STORAGE_DIR, filename)
         contents = await photo.read()
-        with open(file_path, "wb") as f:
-            f.write(contents)
-        photo_path = file_path
 
-        # Compute face embedding
+        # Upload via storage service (Supabase or local disk)
+        photo_path = upload_photo(contents, filename)
+
+        # Compute face embedding for recognition
         embedding = compute_embedding(contents)
-        if embedding is None:
-            # Photo uploaded but no face detected — still save but warn
-            pass
+        # embedding may be None if no face detected — staff is saved but won't
+        # be matched until re-enrolled with a clearer photo.
 
     row = Staff(
         id=staff_id,
@@ -110,20 +111,16 @@ async def update_staff(
         row.status = status
 
     if photo and photo.filename:
-        # Delete old photo if one exists
-        if row.photo_path and os.path.exists(row.photo_path):
-            try:
-                os.remove(row.photo_path)
-            except OSError:
-                pass
+        # Remove the old photo from storage (Supabase or disk)
+        if row.photo_path:
+            delete_photo(row.photo_path)
 
         ext = os.path.splitext(photo.filename)[1] or ".jpg"
         filename = f"{staff_id}{ext}"
-        file_path = os.path.join(STORAGE_DIR, filename)
         contents = await photo.read()
-        with open(file_path, "wb") as f:
-            f.write(contents)
-        row.photo_path = file_path
+
+        # Upload the new photo
+        row.photo_path = upload_photo(contents, filename)
 
         # Re-compute face embedding from the new photo
         embedding = compute_embedding(contents)
@@ -141,9 +138,9 @@ def delete_staff(staff_id: str, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="Staff not found")
 
-    # Delete photo file if it exists
-    if row.photo_path and os.path.exists(row.photo_path):
-        os.remove(row.photo_path)
+    # Delete photo from storage (Supabase or local disk)
+    if row.photo_path:
+        delete_photo(row.photo_path)
 
     db.delete(row)
     db.commit()

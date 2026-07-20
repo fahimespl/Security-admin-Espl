@@ -17,3 +17,9 @@ services:
         sync: false
       - key: TWILIO_WHATSAPP_FROM
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: "staff-photos"
