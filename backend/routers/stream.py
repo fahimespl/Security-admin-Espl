@@ -16,7 +16,7 @@ from datetime import datetime
 
 import numpy as np
 
-from fastapi import APIRouter, UploadFile, File, Depends
+from fastapi import APIRouter, UploadFile, File, Depends, Form
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from middleware.auth import require_api_key
