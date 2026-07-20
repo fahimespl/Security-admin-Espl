@@ -103,6 +103,17 @@ async def ws_detections(websocket: WebSocket):
     await detections_ws(websocket)
 
 
+# Root route
+@app.get("/")
+def root():
+    return {
+        "name": "Esamyak Security Admin API",
+        "status": "online",
+        "docs": "/docs",
+        "health": "/api/health"
+    }
+
+
 # Health check
 @app.get("/api/health")
 def health():
