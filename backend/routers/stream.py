@@ -1,15 +1,22 @@
 """
-Stream router — MJPEG live stream from the backend camera.
+Stream router — camera management and browser-frame processing.
 
-GET /api/stream/mjpeg returns a multipart JPEG boundary stream
-that can be displayed in a browser <img> tag.
+GET  /api/stream/mjpeg           — MJPEG stream (server-camera path)
+POST /api/stream/process-frame   — Accept a JPEG frame from the browser,
+                                   run face recognition + rule engine,
+                                   return detection boxes as JSON.
 """
 
 import os
+import io
 import time
 import logging
 import threading
-from fastapi import APIRouter
+from datetime import datetime
+
+import numpy as np
+
+from fastapi import APIRouter, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from cv.camera import camera_manager
@@ -19,6 +26,111 @@ router = APIRouter(prefix="/api/stream", tags=["stream"])
 
 # Prevent concurrent start/stop races from the frontend
 _camera_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Browser-camera path: process a single JPEG frame sent from the browser
+# ---------------------------------------------------------------------------
+
+@router.post("/process-frame")
+async def process_frame(frame: UploadFile = File(...)):
+    """
+    Accept a JPEG image captured by the browser (getUserMedia → canvas.toBlob),
+    run face detection / recognition and the rule engine, and return boxes.
+
+    Response shape (same as WebSocket payload for backward compatibility):
+        { cameraRunning: true, boxes: [ { id, name, confidence, x, y, w, h } ] }
+    """
+    try:
+        import cv2
+        CV2_OK = True
+    except ImportError:
+        CV2_OK = False
+
+    if not CV2_OK:
+        return JSONResponse(
+            status_code=503,
+            content={"cameraRunning": False, "boxes": [], "error": "OpenCV not available on server."},
+        )
+
+    try:
+        contents = await frame.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    except Exception as exc:
+        logger.warning("process-frame: failed to decode image — %s", exc)
+        return JSONResponse(
+            status_code=400,
+            content={"cameraRunning": True, "boxes": [], "error": "Could not decode image."},
+        )
+
+    if img_bgr is None:
+        return JSONResponse(
+            status_code=400,
+            content={"cameraRunning": True, "boxes": [], "error": "Empty or unreadable image."},
+        )
+
+    # ---- Face recognition ----
+    from database import SessionLocal
+    from services.face_recognition_service import recognise_faces, embedding_from_bytes
+    from services.rule_engine import get_settings, process_detection
+    from services.alert_dispatcher import dispatch_alert
+    from models.staff import Staff
+
+    db = SessionLocal()
+    boxes = []
+    try:
+        settings = get_settings(db)
+        threshold = settings.rules.confidence_threshold
+
+        # Load enrolled staff embeddings
+        rows = db.query(Staff).filter(
+            Staff.status == "Active",
+            Staff.face_embedding.isnot(None),
+        ).all()
+        enrolled = []
+        for r in rows:
+            try:
+                enc = embedding_from_bytes(r.face_embedding)
+                enrolled.append((r.name, enc))
+            except Exception:
+                pass
+
+        boxes = recognise_faces(img_bgr, enrolled, threshold)
+
+        # Run rule engine on each detected face
+        for box in boxes:
+            action = process_detection(
+                db,
+                name=box["name"],
+                confidence=box["confidence"],
+                settings=settings,
+            )
+            if action == "Alert Sent":
+                now_dt = datetime.now()
+                channels = {
+                    "whatsapp": settings.channels.whatsapp,
+                    "siren": settings.channels.siren,
+                    "autoLock": settings.channels.auto_lock,
+                }
+                recipients = [
+                    {"name": r.name, "phone": r.phone}
+                    for r in settings.recipients
+                ]
+                detection_info = {
+                    "name": box["name"],
+                    "confidence": box["confidence"],
+                    "known": box["confidence"] >= threshold,
+                    "timestamp": now_dt.isoformat(),
+                }
+                dispatch_alert(channels, recipients, detection_info)
+
+    except Exception:
+        logger.exception("process-frame: error in face recognition / rule engine")
+    finally:
+        db.close()
+
+    return {"cameraRunning": True, "boxes": boxes}
 
 
 

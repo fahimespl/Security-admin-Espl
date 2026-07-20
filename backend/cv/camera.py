@@ -128,18 +128,20 @@ class CameraManager:
                     cap.release()
 
             if self._cap is None:
-                logger.warning("Failed to open camera index %d with any backend. Falling back to Simulated Camera Mode.", camera_index)
-                self._is_mock = True
-            else:
-                self._is_mock = False
+                logger.warning(
+                    "Failed to open camera index %d with any backend. "
+                    "Server camera unavailable — browser-based capture (getUserMedia) will be used instead.",
+                    camera_index,
+                )
+                # Do NOT enter mock mode — the browser will supply frames via
+                # POST /api/stream/process-frame instead.
+                return
 
+            self._is_mock = False
             self._running = True
             self._thread = threading.Thread(target=self._loop, daemon=True, name="camera-loop")
             self._thread.start()
-            if self._is_mock:
-                logger.info("Simulated camera started.")
-            else:
-                logger.info("Camera started on index %d.", camera_index)
+            logger.info("Camera started on index %d.", camera_index)
 
     def stop(self):
         with self._lock:
@@ -181,45 +183,25 @@ class CameraManager:
 
     def _loop(self):
         last_detection_time = 0.0
-        mock_tick = 0
         while self._running:
             with self._lock:
                 cap = self._cap
-                is_mock = self._is_mock
 
-            if not is_mock and cap is None:
+            if cap is None:
                 time.sleep(0.03)
                 continue
 
-            if is_mock:
-                # Generate a mock/simulated camera frame
-                frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                # Draw grid lines
-                for y in range(0, 480, 60):
-                    cv2.line(frame, (0, y), (640, y), (30, 30, 30), 1)
-                for x in range(0, 640, 80):
-                    cv2.line(frame, (x, 0), (x, 480), (30, 30, 30), 1)
-                
-                # Bouncing indicator
-                mock_tick += 1
-                cx = int(320 + 200 * np.sin(mock_tick * 0.05))
-                cy = int(240 + 100 * np.cos(mock_tick * 0.07))
-                cv2.circle(frame, (cx, cy), 20, (0, 120, 200), -1)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                # Camera stalled — yield briefly then retry
+                time.sleep(0.005)
+                continue
 
-                cv2.putText(frame, "SIMULATED CAMERA (NO WEBCAM ATTACHED)", (70, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                cv2.putText(frame, "Rule engine and alerts are fully active in simulation mode", (60, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (150, 150, 150), 1)
-                cv2.putText(frame, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), (20, 450), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            else:
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    # Camera stalled — yield briefly then retry
-                    time.sleep(0.005)
-                    continue
-                # Skip near-black frames (Windows driver sometimes produces these
-                # during auto-exposure settling or after resume from sleep).
-                if frame.mean() < 3.0:
-                    time.sleep(0.005)
-                    continue
+            # Skip near-black frames (Windows driver sometimes produces these
+            # during auto-exposure settling or after resume from sleep).
+            if frame.mean() < 3.0:
+                time.sleep(0.005)
+                continue
 
             # Encode frame as JPEG for MJPEG streaming immediately (high FPS)
             # Quality 80 — good visual clarity while keeping network throughput reasonable.
@@ -238,42 +220,8 @@ class CameraManager:
                     enrolled = self._load_enrolled(db)
                     threshold = settings.rules.confidence_threshold
 
-                    if is_mock:
-                        # Simulate face detections in mock mode
-                        # Cycle between detection states: face appears every 10 seconds for 3 seconds
-                        boxes = []
-                        seconds_in_cycle = int(time.time()) % 10
-                        if seconds_in_cycle < 3:
-                            name = "Unknown"
-                            conf = 45.0
-                            # If there are enrolled staff members, alternate simulated identity
-                            if enrolled and (int(time.time()) % 20 < 10):
-                                name = enrolled[0][0]
-                                conf = 85.0
-                            
-                            boxes = [{
-                                "id": "simulated-face",
-                                "name": name,
-                                "confidence": conf,
-                                "x": 0.35,
-                                "y": 0.25,
-                                "w": 0.3,
-                                "h": 0.4
-                            }]
-                            
-                            # Draw face overlay directly on the frame for visual confirmation in the stream
-                            fx = int(0.35 * 640)
-                            fy = int(0.25 * 480)
-                            fw = int(0.3 * 640)
-                            fh = int(0.4 * 480)
-                            cv2.rectangle(frame, (fx, fy), (fx + fw, fy + fh), (0, 255, 0) if conf >= threshold else (0, 0, 255), 2)
-                            cv2.putText(frame, f"{name} ({conf}%)", (fx, fy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if conf >= threshold else (0, 0, 255), 1)
-                            # Re-encode with boxes drawn on top; reuse same quality setting.
-                            _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                            self._latest_jpeg = jpeg.tobytes()
-                    else:
-                        # Run real face detection / recognition
-                        boxes = recognise_faces(frame, enrolled, threshold)
+                    # Run real face detection / recognition
+                    boxes = recognise_faces(frame, enrolled, threshold)
 
                     self._latest_boxes = boxes
 
@@ -315,12 +263,8 @@ class CameraManager:
                 finally:
                     db.close()
 
-            # No blanket sleep — let the loop run as fast as the camera delivers
-            # frames. The real camera's cap.read() blocks until a new frame is
-            # available, which naturally throttles CPU usage. For mock mode we
-            # add a minimal sleep to avoid spinning at 100% on a tight loop.
-            if is_mock:
-                time.sleep(0.033)  # ~30 FPS for simulated frames
+            # No blanket sleep — cap.read() blocks until a new frame is
+            # available, which naturally throttles CPU usage.
 
 
 # Module-level singleton
