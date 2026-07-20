@@ -12,7 +12,8 @@ export interface StaffDraft {
   name: string
   role: StaffRole
   status: 'Active' | 'Inactive'
-  photo?: string
+  photo?: string          // data URL — for preview only
+  photoFile?: File        // raw File object — sent to backend
   enrolledOn: string
 }
 
@@ -31,6 +32,7 @@ export function StaffForm({
   const [role, setRole] = useState<StaffRole>('Sales')
   const [active, setActive] = useState(true)
   const [photo, setPhoto] = useState<string | undefined>(undefined)
+  const [photoFile, setPhotoFile] = useState<File | undefined>(undefined)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -40,6 +42,7 @@ export function StaffForm({
       setRole(initial?.role ?? 'Sales')
       setActive(initial ? initial.status === 'Active' : true)
       setPhoto(initial?.photo)
+      setPhotoFile(undefined)
       setError('')
     }
   }, [open, initial])
@@ -47,6 +50,7 @@ export function StaffForm({
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
+    setPhotoFile(file)
     const reader = new FileReader()
     reader.onload = () => setPhoto(reader.result as string)
     reader.readAsDataURL(file)
@@ -62,6 +66,7 @@ export function StaffForm({
       role,
       status: active ? 'Active' : 'Inactive',
       photo,
+      photoFile,
       enrolledOn: initial?.enrolledOn ?? new Date().toISOString().slice(0, 10),
     })
     onClose()

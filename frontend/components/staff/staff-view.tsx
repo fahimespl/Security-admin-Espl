@@ -43,10 +43,10 @@ export function StaffView() {
 
   function handleSubmit(draft: StaffDraft) {
     if (editing) {
-      updateStaff(editing.id, draft)
+      updateStaff(editing.id, { ...draft, photoFile: draft.photoFile })
       toast({ title: 'Staff updated', description: `${draft.name}'s profile was saved.` })
     } else {
-      addStaff(draft)
+      addStaff({ ...draft, photoFile: draft.photoFile })
       toast({ title: 'Staff added', description: `${draft.name} is now enrolled.` })
     }
     setEditing(undefined)

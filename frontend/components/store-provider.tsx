@@ -68,8 +68,8 @@ interface StoreContextValue {
   todayHours: { open: string; close: string; closed: boolean }
   unreadAlerts: number
   clearAlerts: () => void
-  addStaff: (s: Omit<StaffMember, 'id'>) => void
-  updateStaff: (id: string, patch: Partial<StaffMember>) => void
+  addStaff: (s: Omit<StaffMember, 'id'> & { photoFile?: File }) => void
+  updateStaff: (id: string, patch: Partial<StaffMember> & { photoFile?: File }) => void
   deleteStaff: (id: string) => void
   setSettings: (updater: (prev: Settings) => Settings) => void
   addRecipient: (r: Omit<AlertRecipient, 'id'>) => void
@@ -190,16 +190,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // ---- Mutations ----
 
   const addStaff = useCallback(
-    async (s: Omit<StaffMember, 'id'>) => {
+    async (s: Omit<StaffMember, 'id'> & { photoFile?: File }) => {
       const form = new FormData()
       form.append('name', s.name)
       form.append('role', s.role)
       form.append('status', s.status)
-      if (s.photo) {
-        // If photo is a data URL, convert to Blob
-        const resp = await fetch(s.photo)
-        const blob = await resp.blob()
-        form.append('photo', blob, 'face.jpg')
+      if (s.photoFile) {
+        // Use the raw File object directly — no data-URL roundtrip needed
+        form.append('photo', s.photoFile, s.photoFile.name)
       }
       await fetch(`${API}/api/staff`, { method: 'POST', body: form })
       mutateStaff()
@@ -208,11 +206,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   )
 
   const updateStaff = useCallback(
-    async (id: string, patch: Partial<StaffMember>) => {
-      await apiFetch(`/api/staff/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(patch),
-      })
+    async (id: string, patch: Partial<StaffMember> & { photoFile?: File }) => {
+      if (patch.photoFile) {
+        // Photo is changing — must use multipart FormData
+        const form = new FormData()
+        if (patch.name !== undefined) form.append('name', patch.name)
+        if (patch.role !== undefined) form.append('role', patch.role)
+        if (patch.status !== undefined) form.append('status', patch.status)
+        form.append('photo', patch.photoFile, patch.photoFile.name)
+        await fetch(`${API}/api/staff/${id}`, { method: 'PATCH', body: form })
+      } else {
+        // No photo change — send compact JSON patch (name/role/status only)
+        const { photoFile: _ignored, photo: _photo, ...rest } = patch as typeof patch & { photo?: string; photoFile?: File }
+        await apiFetch(`/api/staff/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(rest),
+        })
+      }
       mutateStaff()
     },
     [mutateStaff],

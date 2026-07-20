@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.staff import Staff
-from schemas.staff import StaffOut, StaffUpdate
+from schemas.staff import StaffOut
 from services.face_recognition_service import compute_embedding
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -90,14 +90,45 @@ async def create_staff(
 
 
 @router.patch("/{staff_id}", response_model=StaffOut)
-def update_staff(staff_id: str, patch: StaffUpdate, db: Session = Depends(get_db)):
+async def update_staff(
+    staff_id: str,
+    name: str = Form(None),
+    role: str = Form(None),
+    status: str = Form(None),
+    photo: UploadFile = File(None),
+    db: Session = Depends(get_db),
+):
     row = db.query(Staff).filter(Staff.id == staff_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Staff not found")
 
-    update_data = patch.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(row, key, value)
+    if name is not None:
+        row.name = name
+    if role is not None:
+        row.role = role
+    if status is not None:
+        row.status = status
+
+    if photo and photo.filename:
+        # Delete old photo if one exists
+        if row.photo_path and os.path.exists(row.photo_path):
+            try:
+                os.remove(row.photo_path)
+            except OSError:
+                pass
+
+        ext = os.path.splitext(photo.filename)[1] or ".jpg"
+        filename = f"{staff_id}{ext}"
+        file_path = os.path.join(STORAGE_DIR, filename)
+        contents = await photo.read()
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        row.photo_path = file_path
+
+        # Re-compute face embedding from the new photo
+        embedding = compute_embedding(contents)
+        if embedding is not None:
+            row.face_embedding = embedding
 
     db.commit()
     db.refresh(row)
