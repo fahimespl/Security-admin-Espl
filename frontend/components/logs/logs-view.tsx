@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { ScanFace, ImageIcon } from 'lucide-react'
-import { Avatar, Badge, Button, Card, Modal, inputClass } from '@/components/ui-kit'
+import { Avatar, Badge, Card, Modal, inputClass } from '@/components/ui-kit'
+import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/page-header'
 import { formatDateTime } from '@/lib/format'
 import type { LogEntry } from '@/lib/types'
