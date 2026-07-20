@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from database import get_db
+from middleware.auth import require_api_key
 from models.recipient import AlertRecipient
 from schemas.recipient import RecipientCreate, RecipientOut
 from services.rule_engine import get_settings
@@ -18,7 +19,7 @@ from services.alert_dispatcher import dispatch_alert
 router = APIRouter(prefix="/api", tags=["alerts"])
 
 
-@router.post("/recipients", response_model=RecipientOut, status_code=201)
+@router.post("/recipients", response_model=RecipientOut, status_code=201, dependencies=[Depends(require_api_key)])
 def add_recipient(body: RecipientCreate, db: Session = Depends(get_db)):
     row = AlertRecipient(
         id=f"r-{uuid.uuid4().hex[:8]}",
@@ -35,7 +36,7 @@ def add_recipient(body: RecipientCreate, db: Session = Depends(get_db)):
     return {"id": row.id, "name": row.name, "phone": row.phone}
 
 
-@router.delete("/recipients/{recipient_id}", status_code=204)
+@router.delete("/recipients/{recipient_id}", status_code=204, dependencies=[Depends(require_api_key)])
 def remove_recipient(recipient_id: str, db: Session = Depends(get_db)):
     row = db.query(AlertRecipient).filter(AlertRecipient.id == recipient_id).first()
     if not row:
@@ -46,7 +47,7 @@ def remove_recipient(recipient_id: str, db: Session = Depends(get_db)):
     _sync_recipients_to_settings(db)
 
 
-@router.post("/alerts/test")
+@router.post("/alerts/test", dependencies=[Depends(require_api_key)])
 def test_alert(db: Session = Depends(get_db)):
     """Send a real test alert through all enabled channels."""
     settings = get_settings(db)

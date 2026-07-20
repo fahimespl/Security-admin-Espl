@@ -136,3 +136,40 @@ def detections_per_day(db: Session = Depends(get_db)):
         result.append({"day": label, "count": counts.get(d.isoformat(), 0)})
 
     return result
+
+
+@router.get("/hourly-stats")
+def get_hourly_stats(db: Session = Depends(get_db)):
+    """Return known vs unknown detection counts grouped by hour for the last 12 hours."""
+    now = datetime.now()
+    twelve_hours_ago = now - timedelta(hours=11)
+    
+    # We want buckets for the last 12 hours including the current hour
+    # e.g., if now is 14:30, buckets are 03:00, 04:00 ... 14:00.
+    start_hour = twelve_hours_ago.replace(minute=0, second=0, microsecond=0)
+    
+    # Initialize buckets
+    buckets = {}
+    for i in range(12):
+        dt = start_hour + timedelta(hours=i)
+        time_str = dt.strftime("%-I %p")  # e.g. "3 PM"
+        buckets[time_str] = {"time": time_str, "known": 0, "unknown": 0}
+
+    # Query DB
+    rows = db.query(LogEntry).filter(
+        LogEntry.timestamp >= start_hour.isoformat()
+    ).all()
+
+    for row in rows:
+        try:
+            dt = datetime.fromisoformat(row.timestamp)
+            time_str = dt.strftime("%-I %p")
+            if time_str in buckets:
+                if row.known:
+                    buckets[time_str]["known"] += 1
+                else:
+                    buckets[time_str]["unknown"] += 1
+        except Exception:
+            pass
+
+    return list(buckets.values())

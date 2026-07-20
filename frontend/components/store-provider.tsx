@@ -19,9 +19,12 @@ import type {
 // API helpers
 // ---------------------------------------------------------------------------
 const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? ''
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = {
+    'X-API-Key': API_KEY,
+  }
   // Only set Content-Type for requests with a body (and not FormData)
   if (init?.body && typeof init.body === 'string') {
     headers['Content-Type'] = 'application/json'
@@ -107,6 +110,7 @@ const FALLBACK_SETTINGS: Settings = {
     maintenanceMode: false,
     maintenanceStart: '02:00',
     maintenanceEnd: '05:00',
+    alertUnknownOnly: true,
   },
   channels: { whatsapp: true, siren: false, autoLock: false },
   recipients: [],
@@ -133,7 +137,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [rawStaff],
   )
 
-  const { data: logs, mutate: mutateLogs } = useApi<LogEntry[]>('/api/logs', [])
+  const { data: logsData, mutate: mutateLogs } = useApi<{items: LogEntry[]}>('/api/logs?limit=50', { items: [] })
+  const logs = logsData.items
   const { data: settings, mutate: mutateSettings } = useApi<Settings>('/api/settings', FALLBACK_SETTINGS)
 
   interface StatusResponse {
@@ -199,7 +204,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         // Use the raw File object directly — no data-URL roundtrip needed
         form.append('photo', s.photoFile, s.photoFile.name)
       }
-      await fetch(`${API}/api/staff`, { method: 'POST', body: form })
+      await fetch(`${API}/api/staff`, { 
+        method: 'POST', 
+        headers: { 'X-API-Key': API_KEY },
+        body: form 
+      })
       mutateStaff()
     },
     [mutateStaff],
@@ -214,7 +223,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         if (patch.role !== undefined) form.append('role', patch.role)
         if (patch.status !== undefined) form.append('status', patch.status)
         form.append('photo', patch.photoFile, patch.photoFile.name)
-        await fetch(`${API}/api/staff/${id}`, { method: 'PATCH', body: form })
+        await fetch(`${API}/api/staff/${id}`, { 
+          method: 'PATCH', 
+          headers: { 'X-API-Key': API_KEY },
+          body: form 
+        })
       } else {
         // No photo change — send compact JSON patch (name/role/status only)
         const { photoFile: _ignored, photo: _photo, ...rest } = patch as typeof patch & { photo?: string; photoFile?: File }

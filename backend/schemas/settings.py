@@ -42,6 +42,7 @@ class RulesSettings(BaseModel):
     maintenance_mode: bool
     maintenance_start: str  # HH:mm
     maintenance_end: str    # HH:mm
+    alert_unknown_only: bool = True  # Alert only on unknown faces during closed hours
 
 
 class ChannelsSettings(BaseModel):
@@ -90,6 +91,7 @@ DEFAULT_SETTINGS = SettingsSchema(
         maintenance_mode=False,
         maintenance_start="02:00",
         maintenance_end="05:00",
+        alert_unknown_only=True,
     ),
     channels=ChannelsSettings(whatsapp=True, siren=False, auto_lock=False),
     recipients=[],

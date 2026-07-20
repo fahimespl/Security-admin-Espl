@@ -1,33 +1,47 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { DoorOpen, ShieldAlert, Users, Radio } from 'lucide-react'
 import { useStore } from '@/components/store-provider'
 import { Card } from '@/components/ui-kit'
 import { cn } from '@/lib/utils'
 
 export function SummaryCards() {
-  const { staff, logs, storeOpen, settings, now } = useStore()
+  const { storeOpen, settings } = useStore()
+  
+  const [summary, setSummary] = useState({
+    totalStaff: 0,
+    activeStaff: 0,
+    todayDetections: 0,
+    todayAlerts: 0,
+    totalLogs: 0,
+  })
 
-  const enrolled = staff.filter((s) => s.status === 'Active').length
-  const alertsToday = logs.filter((l) => {
-    const d = new Date(l.timestamp)
-    return l.action === 'Alert Sent' && d.toDateString() === now.toDateString()
-  }).length
+  useEffect(() => {
+    const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000'
+    const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? ''
+    fetch(`${API}/api/dashboard/summary`, {
+      headers: { 'X-API-Key': API_KEY }
+    })
+      .then(res => res.json())
+      .then(data => setSummary(data))
+      .catch(() => {})
+  }, [])
 
   const cards = [
     {
       label: 'Staff Enrolled',
-      value: `${enrolled}`,
-      hint: `${staff.length} total profiles`,
+      value: `${summary.activeStaff}`,
+      hint: `${summary.totalStaff} total profiles`,
       icon: Users,
       tone: 'primary' as const,
     },
     {
       label: 'Alerts Today',
-      value: `${alertsToday}`,
+      value: `${summary.todayAlerts}`,
       hint: 'Since midnight',
       icon: ShieldAlert,
-      tone: alertsToday > 0 ? ('danger' as const) : ('neutral' as const),
+      tone: summary.todayAlerts > 0 ? ('danger' as const) : ('neutral' as const),
     },
     {
       label: 'Store Status',

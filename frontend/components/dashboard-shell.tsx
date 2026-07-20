@@ -18,6 +18,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useStore } from '@/components/store-provider'
 import { Dot } from '@/components/ui-kit'
+import { NotificationPanel } from '@/components/notification-panel'
 
 const NAV = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -177,18 +178,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               </span>
             </div>
 
-            <button
-              onClick={clearAlerts}
-              className="relative flex size-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:text-foreground"
-              aria-label={`Notifications, ${unreadAlerts} unread`}
-            >
-              <Bell className="size-[18px]" />
-              {unreadAlerts > 0 ? (
-                <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-danger text-[10px] font-bold text-danger-foreground">
-                  {unreadAlerts}
-                </span>
-              ) : null}
-            </button>
+            <NotificationPanel />
           </div>
         </header>
 

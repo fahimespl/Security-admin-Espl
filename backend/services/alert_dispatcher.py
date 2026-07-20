@@ -53,7 +53,7 @@ def send_whatsapp(
                 "to": to_number,
                 "body": message,
             }
-            if media_url:
+            if media_url and media_url.startswith("http"):
                 kwargs["media_url"] = [media_url]
             _twilio_client.messages.create(**kwargs)
             results.append({"phone": r["phone"], "success": True})

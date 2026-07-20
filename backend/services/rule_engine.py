@@ -14,12 +14,10 @@ from sqlalchemy.orm import Session
 
 from models.settings import SettingsRow
 from models.log import LogEntry
+from models.cooldown import CooldownEntry
 from schemas.settings import SettingsSchema, DEFAULT_SETTINGS
 
 logger = logging.getLogger(__name__)
-
-# Per-identity cooldown tracker:  identity_key → last_alert_datetime
-_cooldown_tracker: dict[str, datetime] = {}
 
 
 def get_settings(db: Session) -> SettingsSchema:
@@ -81,21 +79,30 @@ def is_maintenance_active(settings: SettingsSchema, now: Optional[datetime] = No
         return current_minutes >= start or current_minutes < end
 
 
-def check_cooldown(identity_key: str, cooldown_seconds: int) -> bool:
+def check_cooldown(db: Session, identity_key: str, cooldown_seconds: int) -> bool:
     """
     Returns True if an alert should fire (cooldown has elapsed).
     Returns False if we're still within the cooldown window.
     """
     now = datetime.now()
-    last = _cooldown_tracker.get(identity_key)
-    if last and (now - last) < timedelta(seconds=cooldown_seconds):
-        return False
+    row = db.query(CooldownEntry).filter(CooldownEntry.identity_key == identity_key).first()
+    if row:
+        last = datetime.fromisoformat(row.last_alert_at)
+        if (now - last) < timedelta(seconds=cooldown_seconds):
+            return False
     return True
 
 
-def record_alert(identity_key: str):
-    """Mark that an alert was just sent for this identity."""
-    _cooldown_tracker[identity_key] = datetime.now()
+def record_alert(db: Session, identity_key: str):
+    """Mark that an alert was just sent for this identity in the DB."""
+    row = db.query(CooldownEntry).filter(CooldownEntry.identity_key == identity_key).first()
+    now_iso = datetime.now().isoformat()
+    if row:
+        row.last_alert_at = now_iso
+    else:
+        row = CooldownEntry(identity_key=identity_key, last_alert_at=now_iso)
+        db.add(row)
+    db.commit()
 
 
 def process_detection(
@@ -103,7 +110,8 @@ def process_detection(
     name: str,
     confidence: float,
     settings: SettingsSchema,
-) -> str:
+    snapshot_url: Optional[str] = None,
+) -> dict:
     """
     Apply the full rule engine to a single detected face.
 
@@ -112,7 +120,7 @@ def process_detection(
       when maintenance is NOT active and cooldown has elapsed.
     - During open hours, just log.
 
-    Returns the action taken: "Alert Sent" or "Logged Only".
+    Returns the action taken and log ID: {"action": "Alert Sent" | "Logged Only", "log_id": str}.
     """
     now = datetime.now()
     store_open = is_store_open(settings, now)
@@ -125,10 +133,13 @@ def process_detection(
     # Determine action
     should_alert = False
     if not store_open and not maintenance_active:
-        # Closed hours + no maintenance → alert on ANY face
-        if check_cooldown(identity_key, settings.rules.cooldown_seconds):
+        # Closed hours + no maintenance
+        should_fire = True
+        if settings.rules.alert_unknown_only and known:
+            should_fire = False  # Known staff — skip alert
+        if should_fire and check_cooldown(db, identity_key, settings.rules.cooldown_seconds):
             should_alert = True
-            record_alert(identity_key)
+            record_alert(db, identity_key)
 
     action = "Alert Sent" if should_alert else "Logged Only"
 
@@ -140,8 +151,9 @@ def process_detection(
         store_open=store_open,
         action=action,
         confidence=round(confidence, 1),
+        snapshot_path=snapshot_url,
     )
     db.add(log)
     db.commit()
 
-    return action
+    return {"action": action, "log_id": log.id}

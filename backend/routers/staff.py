@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
 from database import get_db
+from middleware.auth import require_api_key
 from models.staff import Staff
 from schemas.staff import StaffOut
 from services.face_recognition_service import compute_embedding
@@ -50,7 +51,7 @@ def list_staff(db: Session = Depends(get_db)):
     return [_staff_to_out(r) for r in rows]
 
 
-@router.post("", response_model=StaffOut, status_code=201)
+@router.post("", response_model=StaffOut, status_code=201, dependencies=[Depends(require_api_key)])
 async def create_staff(
     name: str = Form(...),
     role: str = Form(...),
@@ -90,7 +91,7 @@ async def create_staff(
     return _staff_to_out(row)
 
 
-@router.patch("/{staff_id}", response_model=StaffOut)
+@router.patch("/{staff_id}", response_model=StaffOut, dependencies=[Depends(require_api_key)])
 async def update_staff(
     staff_id: str,
     name: str = Form(None),
@@ -132,7 +133,7 @@ async def update_staff(
     return _staff_to_out(row)
 
 
-@router.delete("/{staff_id}", status_code=204)
+@router.delete("/{staff_id}", status_code=204, dependencies=[Depends(require_api_key)])
 def delete_staff(staff_id: str, db: Session = Depends(get_db)):
     row = db.query(Staff).filter(Staff.id == staff_id).first()
     if not row:
@@ -144,3 +145,14 @@ def delete_staff(staff_id: str, db: Session = Depends(get_db)):
 
     db.delete(row)
     db.commit()
+
+
+@router.post("/check-face")
+async def check_face(photo: UploadFile = File(...)):
+    """Dry-run endpoint to verify if a face is detectable in the uploaded photo."""
+    try:
+        contents = await photo.read()
+        embedding = compute_embedding(contents)
+        return {"faceDetected": embedding is not None}
+    except Exception:
+        return {"faceDetected": False}

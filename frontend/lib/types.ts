@@ -21,6 +21,7 @@ export interface LogEntry {
   storeOpen: boolean
   action: ActionTaken
   confidence: number // 0-100
+  snapshotPath?: string
 }
 
 export interface AlertRecipient {
@@ -49,6 +50,7 @@ export interface Settings {
     maintenanceMode: boolean
     maintenanceStart: string
     maintenanceEnd: string
+    alertUnknownOnly: boolean
   }
   channels: {
     whatsapp: boolean

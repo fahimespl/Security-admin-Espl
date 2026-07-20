@@ -1,6 +1,6 @@
 'use client'
 
-import { Clock, ShieldQuestion } from 'lucide-react'
+import { Clock, ShieldQuestion, UserCheck } from 'lucide-react'
 import { useStore } from '@/components/store-provider'
 import { useToast } from '@/components/toast'
 import { Badge, Card, CardHeader, Field, Slider, Switch, inputClass } from '@/components/ui-kit'
@@ -213,6 +213,31 @@ export function HoursView() {
               <p className="mt-2 text-xs text-muted-foreground">
                 Minimum match score before a face counts as &quot;known&quot;.
               </p>
+            </div>
+
+            <div className="md:col-span-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-9 items-center justify-center rounded-lg bg-primary/15 text-primary">
+                    <UserCheck className="size-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      Alert on unknown faces only
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      When enabled, recognized staff won't trigger alerts during closed hours.
+                    </p>
+                  </div>
+                </div>
+                <Switch
+                  checked={rules.alertUnknownOnly ?? true}
+                  onChange={(v) =>
+                    setSettings((p) => ({ ...p, rules: { ...p.rules, alertUnknownOnly: v } }))
+                  }
+                  label="Alert unknown only"
+                />
+              </div>
             </div>
 
             <div className="md:col-span-2">

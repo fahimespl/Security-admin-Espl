@@ -1,9 +1,8 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { ImageIcon, ScanFace } from 'lucide-react'
-import { useStore } from '@/components/store-provider'
-import { Avatar, Badge, Card, Modal, inputClass } from '@/components/ui-kit'
+import { useEffect, useState } from 'react'
+import { ScanFace, ImageIcon } from 'lucide-react'
+import { Avatar, Badge, Button, Card, Modal, inputClass } from '@/components/ui-kit'
 import { PageHeader } from '@/components/page-header'
 import { formatDateTime } from '@/lib/format'
 import type { LogEntry } from '@/lib/types'
@@ -13,25 +12,54 @@ type KnownFilter = 'all' | 'known' | 'unknown'
 type StatusFilter = 'all' | 'open' | 'closed'
 
 export function LogsView() {
-  const { logs } = useStore()
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [knownFilter, setKnownFilter] = useState<KnownFilter>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [selected, setSelected] = useState<LogEntry | null>(null)
 
-  const filtered = useMemo(() => {
-    return logs.filter((l) => {
-      const d = new Date(l.timestamp)
-      if (from && d < new Date(from + 'T00:00:00')) return false
-      if (to && d > new Date(to + 'T23:59:59')) return false
-      if (knownFilter === 'known' && !l.known) return false
-      if (knownFilter === 'unknown' && l.known) return false
-      if (statusFilter === 'open' && !l.storeOpen) return false
-      if (statusFilter === 'closed' && l.storeOpen) return false
-      return true
-    })
-  }, [logs, from, to, knownFilter, statusFilter])
+  const [page, setPage] = useState(1)
+  const [data, setData] = useState<{items: LogEntry[], total: number, pages: number}>({items: [], total: 0, pages: 1})
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    setPage(1)
+  }, [from, to, knownFilter, statusFilter])
+
+  useEffect(() => {
+    setLoading(true)
+    const params = new URLSearchParams()
+    params.set('page', page.toString())
+    params.set('limit', '50')
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    if (knownFilter === 'known') params.set('known', 'true')
+    if (knownFilter === 'unknown') params.set('known', 'false')
+    if (statusFilter === 'open') params.set('store_open', 'true')
+    if (statusFilter === 'closed') params.set('store_open', 'false')
+
+    const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000'
+    fetch(`${API}/api/logs?${params.toString()}`)
+      .then(r => r.json())
+      .then(d => {
+        setData(d)
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [page, from, to, knownFilter, statusFilter])
+
+  function handleExport() {
+    const params = new URLSearchParams()
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    if (knownFilter === 'known') params.set('known', 'true')
+    if (knownFilter === 'unknown') params.set('known', 'false')
+    if (statusFilter === 'open') params.set('store_open', 'true')
+    if (statusFilter === 'closed') params.set('store_open', 'false')
+
+    const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000'
+    window.open(`${API}/api/logs/export?${params.toString()}`, '_blank')
+  }
 
   return (
     <div>
@@ -82,8 +110,13 @@ export function LogsView() {
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between border-b border-border px-5 py-3">
           <p className="text-sm text-muted-foreground">
-            Showing <span className="font-medium text-foreground">{filtered.length}</span> of {logs.length} events
+            {loading ? 'Loading...' : (
+              <>Showing <span className="font-medium text-foreground">{data.items.length}</span> of {data.total} events</>
+            )}
           </p>
+          <Button variant="outline" size="sm" onClick={handleExport} disabled={loading || data.total === 0}>
+            Export CSV
+          </Button>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -98,7 +131,7 @@ export function LogsView() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filtered.map((l) => (
+              {data.items.map((l) => (
                 <tr
                   key={l.id}
                   onClick={() => setSelected(l)}
@@ -157,7 +190,7 @@ export function LogsView() {
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 ? (
+              {data.items.length === 0 && !loading ? (
                 <tr>
                   <td colSpan={6} className="px-5 py-10 text-center text-sm text-muted-foreground">
                     No events match your filters.
@@ -167,6 +200,29 @@ export function LogsView() {
             </tbody>
           </table>
         </div>
+        
+        {/* Pagination controls */}
+        {data.pages > 1 ? (
+          <div className="flex items-center justify-center gap-4 border-t border-border px-5 py-3">
+            <button
+              disabled={page <= 1}
+              onClick={() => setPage(p => p - 1)}
+              className="text-sm font-medium text-muted-foreground disabled:opacity-50"
+            >
+              &larr; Previous
+            </button>
+            <span className="text-sm text-muted-foreground">
+              Page {page} of {data.pages}
+            </span>
+            <button
+              disabled={page >= data.pages}
+              onClick={() => setPage(p => p + 1)}
+              className="text-sm font-medium text-muted-foreground disabled:opacity-50"
+            >
+              Next &rarr;
+            </button>
+          </div>
+        ) : null}
       </Card>
 
       {/* Detail modal */}
@@ -178,11 +234,19 @@ export function LogsView() {
       >
         {selected ? (
           <div className="space-y-4">
-            <div className="flex aspect-video w-full items-center justify-center rounded-lg border border-border bg-muted/40">
-              <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                <ImageIcon className="size-8" />
-                <span className="text-sm">Snapshot placeholder</span>
-              </div>
+            <div className="flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/40">
+              {selected.snapshotPath ? (
+                <img
+                  src={selected.snapshotPath.startsWith('http') ? selected.snapshotPath : `${process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000'}${selected.snapshotPath}`}
+                  alt="Snapshot"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                  <ImageIcon className="size-8" />
+                  <span className="text-sm">No snapshot available</span>
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Detail label="Identity" value={selected.known ? (selected.staffName ?? 'Known') : 'Unknown Person'} />

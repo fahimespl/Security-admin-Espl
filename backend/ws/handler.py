@@ -29,11 +29,13 @@ async def detections_ws(websocket: WebSocket):
 
     try:
         while True:
+            cam_id = websocket.query_params.get("cam", "0")
+            cam_inst = camera_manager.get_camera(cam_id)
             # Push latest boxes with camera state so frontend can
             # distinguish "camera off" from "no detections"
-            boxes = camera_manager.latest_boxes
+            boxes = cam_inst.latest_boxes
             payload = json.dumps({
-                "cameraRunning": camera_manager.running,
+                "cameraRunning": cam_inst.running,
                 "boxes": boxes,
             })
             await websocket.send_text(payload)

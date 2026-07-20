@@ -8,7 +8,7 @@ import time
 import logging
 import threading
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 import numpy as np
 
@@ -26,10 +26,11 @@ except ImportError:
     CV2_AVAILABLE = False
 
 
-class CameraManager:
-    """Singleton-ish manager for the background camera loop."""
+class CameraInstance:
+    """Manages a single background camera loop."""
 
-    def __init__(self):
+    def __init__(self, cam_id: str):
+        self.cam_id = cam_id
         self._cap: Optional[object] = None  # cv2.VideoCapture
         self._running = False
         self._is_mock = False
@@ -43,8 +44,6 @@ class CameraManager:
 
         # Detection interval
         self._interval = int(os.getenv("DETECTION_INTERVAL_MS", "300")) / 1000.0
-
-    # ------ public API ------
 
     @property
     def running(self) -> bool:
@@ -65,23 +64,21 @@ class CameraManager:
     def start(self, camera_index: int = 0):
         with self._lock:
             if not CV2_AVAILABLE:
-                logger.error("Cannot start camera — OpenCV not available.")
+                logger.error(f"Cannot start camera {self.cam_id} — OpenCV not available.")
                 return
             if self._running:
-                logger.info("Camera already running.")
+                logger.info(f"Camera {self.cam_id} already running.")
                 return
 
-            # Try multiple backends — MSMF (default on Windows) sometimes needs
-            # a warm-up read; DSHOW may fail when opening by index on some machines.
             import platform
-            backends = [None]  # None = OpenCV default
+            backends = [None]
             if platform.system() == "Windows":
                 backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, None]
 
             self._cap = None
             for backend in backends:
                 backend_name = {cv2.CAP_DSHOW: "DSHOW", cv2.CAP_MSMF: "MSMF"}.get(backend, "default") if backend is not None else "default"
-                logger.info("Trying camera %d with backend: %s", camera_index, backend_name)
+                logger.info("Trying camera index %d with backend: %s for cam_id %s", camera_index, backend_name, self.cam_id)
                 try:
                     cap = cv2.VideoCapture(camera_index, backend) if backend is not None else cv2.VideoCapture(camera_index)
                 except Exception as exc:
@@ -93,63 +90,47 @@ class CameraManager:
                     cap.release()
                     continue
 
-                # ---- Performance tuning (set before warm-up) ----
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 cap.set(cv2.CAP_PROP_FPS, 30)
 
-                # Windows DSHOW cameras often need a 1-2 second delay after
-                # opening before the sensor auto-exposure settles — without this
-                # the first N frames are completely black even though ret=True.
                 logger.info("Backend %s: waiting for sensor exposure to settle...", backend_name)
                 time.sleep(1.5)
 
-                # Warm-up: read up to 30 frames and require at least one that
-                # has a mean brightness above 5/255 (i.e. not a black frame).
                 frame_ok = False
                 for attempt in range(30):
                     ret, warm_frame = cap.read()
                     if ret and warm_frame is not None:
                         mean_brightness = warm_frame.mean()
-                        logger.info(
-                            "Backend %s: warm-up attempt %d — brightness=%.1f",
-                            backend_name, attempt + 1, mean_brightness,
-                        )
-                        if mean_brightness > 5.0:  # reject near-black frames
+                        if mean_brightness > 5.0:
                             frame_ok = True
-                            logger.info("Backend %s: warm-up OK on attempt %d (brightness=%.1f)", backend_name, attempt + 1, mean_brightness)
                             break
-                    time.sleep(0.1)  # 100ms between retries
+                    time.sleep(0.1)
 
                 if frame_ok:
                     self._cap = cap
                     break
                 else:
-                    logger.info("Backend %s: warm-up failed after 30 attempts (all frames black or unreadable)", backend_name)
+                    logger.info("Backend %s: warm-up failed after 30 attempts", backend_name)
                     cap.release()
 
             if self._cap is None:
                 logger.warning(
-                    "Failed to open camera index %d with any backend. "
-                    "Server camera unavailable — browser-based capture (getUserMedia) will be used instead.",
-                    camera_index,
+                    f"Failed to open camera index {camera_index} with any backend for cam_id {self.cam_id}. "
+                    "Server camera unavailable — browser-based capture will be used instead."
                 )
-                # Do NOT enter mock mode — the browser will supply frames via
-                # POST /api/stream/process-frame instead.
                 return
 
             self._is_mock = False
             self._running = True
-            self._thread = threading.Thread(target=self._loop, daemon=True, name="camera-loop")
+            self._thread = threading.Thread(target=self._loop, daemon=True, name=f"camera-loop-{self.cam_id}")
             self._thread.start()
-            logger.info("Camera started on index %d.", camera_index)
+            logger.info("Camera %s started on index %d.", self.cam_id, camera_index)
 
     def stop(self):
         with self._lock:
             if not self._running and not self._is_mock and self._cap is None:
-                logger.info("Camera already stopped.")
                 return
             self._running = False
-        # Join outside lock so _loop() can exit cleanly
         if self._thread:
             self._thread.join(timeout=3)
             self._thread = None
@@ -161,12 +142,9 @@ class CameraManager:
             self._latest_boxes = []
             self._latest_frame = None
             self._latest_jpeg = None
-        logger.info("Camera stopped.")
-
-    # ------ internal loop ------
+        logger.info("Camera %s stopped.", self.cam_id)
 
     def _load_enrolled(self, db) -> List[Tuple[str, np.ndarray]]:
-        """Load all active staff with embeddings from the DB."""
         from models.staff import Staff
         rows = db.query(Staff).filter(
             Staff.status == "Active",
@@ -193,18 +171,13 @@ class CameraManager:
 
             ret, frame = cap.read()
             if not ret or frame is None:
-                # Camera stalled — yield briefly then retry
                 time.sleep(0.005)
                 continue
 
-            # Skip near-black frames (Windows driver sometimes produces these
-            # during auto-exposure settling or after resume from sleep).
             if frame.mean() < 3.0:
                 time.sleep(0.005)
                 continue
 
-            # Encode frame as JPEG for MJPEG streaming immediately (high FPS)
-            # Quality 80 — good visual clarity while keeping network throughput reasonable.
             _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             self._latest_jpeg = jpeg.tobytes()
             self._latest_frame = frame
@@ -213,19 +186,15 @@ class CameraManager:
             if now_time - last_detection_time >= self._interval:
                 last_detection_time = now_time
 
-                # Get a DB session for this tick
                 db = SessionLocal()
                 try:
                     settings = get_settings(db)
                     enrolled = self._load_enrolled(db)
                     threshold = settings.rules.confidence_threshold
 
-                    # Run real face detection / recognition
                     boxes = recognise_faces(frame, enrolled, threshold)
-
                     self._latest_boxes = boxes
 
-                    # Run rule engine on each detected face
                     for box in boxes:
                         action = process_detection(
                             db,
@@ -233,7 +202,6 @@ class CameraManager:
                             confidence=box["confidence"],
                             settings=settings,
                         )
-                        # If alert was sent, dispatch through enabled channels
                         if action == "Alert Sent":
                             now_dt = datetime.now()
                             channels = {
@@ -241,7 +209,6 @@ class CameraManager:
                                 "siren": settings.channels.siren,
                                 "autoLock": settings.channels.auto_lock,
                             }
-                            # Get recipients from settings
                             recipients = [
                                 {"name": r.name, "phone": r.phone}
                                 for r in settings.recipients
@@ -255,7 +222,7 @@ class CameraManager:
                             dispatch_alert(channels, recipients, detection_info)
 
                 except Exception:
-                    logger.exception("Error in camera detection loop")
+                    logger.exception(f"Error in camera {self.cam_id} detection loop")
                     try:
                         db.rollback()
                     except Exception:
@@ -263,9 +230,30 @@ class CameraManager:
                 finally:
                     db.close()
 
-            # No blanket sleep — cap.read() blocks until a new frame is
-            # available, which naturally throttles CPU usage.
+
+class CameraManager:
+    """Registry of multiple CameraInstances."""
+    def __init__(self):
+        self._cameras: Dict[str, CameraInstance] = {}
+        self._lock = threading.Lock()
+
+    def get_camera(self, cam_id: str) -> CameraInstance:
+        with self._lock:
+            if cam_id not in self._cameras:
+                self._cameras[cam_id] = CameraInstance(cam_id)
+            return self._cameras[cam_id]
+
+    @property
+    def running(self) -> bool:
+        # Backward compatibility for main.py checks
+        return any(c.running for c in self._cameras.values())
+
+    def stop(self):
+        with self._lock:
+            for cam in self._cameras.values():
+                cam.stop()
+            self._cameras.clear()
 
 
-# Module-level singleton
+# Module-level singleton registry
 camera_manager = CameraManager()

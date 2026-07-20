@@ -16,9 +16,10 @@ from datetime import datetime
 
 import numpy as np
 
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 
+from middleware.auth import require_api_key
 from cv.camera import camera_manager
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,10 @@ _camera_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 @router.post("/process-frame")
-async def process_frame(frame: UploadFile = File(...)):
+async def process_frame(
+    frame: UploadFile = File(...),
+    cam: str = Form("0")
+):
     """
     Accept a JPEG image captured by the browser (getUserMedia → canvas.toBlob),
     run face detection / recognition and the rule engine, and return boxes.
@@ -100,12 +104,30 @@ async def process_frame(frame: UploadFile = File(...)):
 
         # Run rule engine on each detected face
         for box in boxes:
-            action = process_detection(
+            res = process_detection(
                 db,
                 name=box["name"],
                 confidence=box["confidence"],
                 settings=settings,
             )
+            action = res["action"]
+            log_id = res["log_id"]
+
+            # Save snapshot for evidence
+            from services.storage_service import upload_photo
+            from models.log import LogEntry
+            snapshot_url = None
+            try:
+                filename = f"snap-{log_id}.jpg"
+                snapshot_url = upload_photo(contents, filename)
+                # Update the log entry with the snapshot path
+                log_row = db.query(LogEntry).filter(LogEntry.id == log_id).first()
+                if log_row:
+                    log_row.snapshot_path = snapshot_url
+                    db.commit()
+            except Exception as e:
+                logger.error(f"Failed to save snapshot for log {log_id}: {e}")
+
             if action == "Alert Sent":
                 now_dt = datetime.now()
                 channels = {
@@ -123,7 +145,7 @@ async def process_frame(frame: UploadFile = File(...)):
                     "known": box["confidence"] >= threshold,
                     "timestamp": now_dt.isoformat(),
                 }
-                dispatch_alert(channels, recipients, detection_info)
+                dispatch_alert(channels, recipients, detection_info, snapshot_url=snapshot_url)
 
     except Exception:
         logger.exception("process-frame: error in face recognition / rule engine")
@@ -134,16 +156,17 @@ async def process_frame(frame: UploadFile = File(...)):
 
 
 
-def _mjpeg_generator():
+def _mjpeg_generator(cam_id: str):
     """Yield JPEG frames as multipart boundaries.
     
     Polls the camera manager at ~10 ms intervals and only sends a frame
     when the JPEG buffer has actually changed, avoiding duplicate frames
     and wasted bandwidth.
     """
+    cam_inst = camera_manager.get_camera(cam_id)
     last_sent: bytes | None = None
-    while camera_manager.running:
-        jpeg = camera_manager.latest_jpeg
+    while cam_inst.running:
+        jpeg = cam_inst.latest_jpeg
         if jpeg and jpeg is not last_sent:
             last_sent = jpeg
             yield (
@@ -156,40 +179,43 @@ def _mjpeg_generator():
 
 
 @router.get("/mjpeg")
-def mjpeg_stream():
+def mjpeg_stream(cam: str = "0"):
     """MJPEG boundary stream endpoint for the frontend <img> element."""
-    if not camera_manager.running:
+    cam_inst = camera_manager.get_camera(cam)
+    if not cam_inst.running:
         return StreamingResponse(
             iter([b"Camera not started"]),
             media_type="text/plain",
             status_code=503,
         )
     return StreamingResponse(
-        _mjpeg_generator(),
+        _mjpeg_generator(cam),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
 
 @router.get("/camera-status")
-def camera_status():
+def camera_status(cam: str = "0"):
     """Check whether the camera is currently running."""
+    cam_inst = camera_manager.get_camera(cam)
     return {
-        "running": camera_manager.running,
-        "mock": camera_manager.is_mock,
+        "running": cam_inst.running,
+        "mock": cam_inst.is_mock,
     }
 
 
-@router.post("/restart-camera")
-def restart_camera():
+@router.post("/restart-camera", dependencies=[Depends(require_api_key)])
+def restart_camera(cam: str = "0"):
     """Stop the camera (if running) and try to re-open it."""
     if not _camera_lock.acquire(blocking=False):
         return JSONResponse(status_code=409, content={"status": "busy", "message": "Camera operation already in progress."})
     try:
         camera_index = int(os.getenv("CAMERA_INDEX", "0"))
-        camera_manager.stop()
-        camera_manager.start(camera_index)
-        if camera_manager.running:
-            if camera_manager.is_mock:
+        cam_inst = camera_manager.get_camera(cam)
+        cam_inst.stop()
+        cam_inst.start(camera_index)
+        if cam_inst.running:
+            if cam_inst.is_mock:
                 return {
                     "status": "ok",
                     "mock": True,
@@ -208,15 +234,17 @@ def restart_camera():
         _camera_lock.release()
 
 
-@router.post("/stop-camera")
-def stop_camera():
+@router.post("/stop-camera", dependencies=[Depends(require_api_key)])
+def stop_camera(cam: str = "0"):
     """Stop the camera capture loop."""
     if not _camera_lock.acquire(blocking=False):
         return JSONResponse(status_code=409, content={"status": "busy", "message": "Camera operation already in progress."})
     try:
-        if not camera_manager.running:
+        cam_inst = camera_manager.get_camera(cam)
+        if not cam_inst.running:
             return {"status": "ok", "message": "Camera was not running."}
-        camera_manager.stop()
+        cam_inst.stop()
         return {"status": "ok", "message": "Camera stopped."}
     finally:
         _camera_lock.release()
+

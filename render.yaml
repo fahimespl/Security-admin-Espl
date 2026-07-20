@@ -23,3 +23,5 @@ services:
         sync: false
       - key: SUPABASE_BUCKET
         value: "staff-photos"
+      - key: BACKEND_API_KEY
+        sync: false

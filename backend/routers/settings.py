@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from database import get_db
+from middleware.auth import require_api_key
 from models.settings import SettingsRow
 from schemas.settings import SettingsSchema, DEFAULT_SETTINGS
 
@@ -35,7 +36,7 @@ def get_settings(db: Session = Depends(get_db)):
     return json.loads(settings.model_dump_json(by_alias=True))
 
 
-@router.put("")
+@router.put("", dependencies=[Depends(require_api_key)])
 def update_settings(payload: SettingsSchema, db: Session = Depends(get_db)):
     row = db.query(SettingsRow).filter(SettingsRow.id == 1).first()
     data_json = payload.model_dump_json(by_alias=True)

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Upload } from 'lucide-react'
+import { Upload, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 import { Avatar, Field, Modal, Switch, inputClass } from '@/components/ui-kit'
 import { Button } from '@/components/ui/button'
 import type { StaffMember, StaffRole } from '@/lib/types'
@@ -34,6 +34,7 @@ export function StaffForm({
   const [photo, setPhoto] = useState<string | undefined>(undefined)
   const [photoFile, setPhotoFile] = useState<File | undefined>(undefined)
   const [error, setError] = useState('')
+  const [faceStatus, setFaceStatus] = useState<'idle' | 'checking' | 'detected' | 'not-detected'>('idle')
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -44,16 +45,43 @@ export function StaffForm({
       setPhoto(initial?.photo)
       setPhotoFile(undefined)
       setError('')
+      setFaceStatus('idle')
     }
   }, [open, initial])
 
-  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     setPhotoFile(file)
+    
+    // Local preview
     const reader = new FileReader()
     reader.onload = () => setPhoto(reader.result as string)
     reader.readAsDataURL(file)
+
+    // Server-side face check
+    setFaceStatus('checking')
+    const form = new FormData()
+    form.append('photo', file, file.name)
+    
+    try {
+      const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000'
+      const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? ''
+      const res = await fetch(`${API}/api/staff/check-face`, {
+        method: 'POST',
+        headers: { 'X-API-Key': API_KEY },
+        body: form
+      })
+      
+      if (res.ok) {
+        const data = await res.json()
+        setFaceStatus(data.faceDetected ? 'detected' : 'not-detected')
+      } else {
+        setFaceStatus('idle')
+      }
+    } catch {
+      setFaceStatus('idle')
+    }
   }
 
   function submit() {
@@ -94,7 +122,22 @@ export function StaffForm({
               <Upload className="size-4" />
               Upload photo
             </Button>
-            <p className="mt-1.5 text-xs text-muted-foreground">JPG or PNG, preview only.</p>
+            <p className="mt-1.5 text-xs text-muted-foreground">JPG or PNG</p>
+            {faceStatus === 'checking' && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" /> Checking for face...
+              </p>
+            )}
+            {faceStatus === 'detected' && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-success">
+                <CheckCircle2 className="size-3" /> Face detected
+              </p>
+            )}
+            {faceStatus === 'not-detected' && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-danger">
+                <AlertCircle className="size-3" /> No face detected
+              </p>
+            )}
           </div>
         </div>
 
