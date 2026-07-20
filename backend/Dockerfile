@@ -14,15 +14,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Limit parallel compilation jobs to 1 to prevent OOM during dlib build
+# dlib compiles thousands of C++ files — parallel jobs easily exhaust 8GB RAM
+ENV CMAKE_BUILD_PARALLEL_LEVEL=1
+ENV MAKEFLAGS="-j1"
+
 # Copy requirements and install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+
+# Install dlib first in isolation with single-threaded build
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir "dlib==19.24.6"
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend codebase
 COPY . .
 
-# Set dynamic port for Railway compatibility
+# Set dynamic port for Railway/Render compatibility
 ENV PORT=8000
 EXPOSE 8000
 
