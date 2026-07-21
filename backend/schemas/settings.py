@@ -87,7 +87,7 @@ DEFAULT_SETTINGS = SettingsSchema(
     ),
     rules=RulesSettings(
         cooldown_seconds=30,
-        confidence_threshold=75,
+        confidence_threshold=55,
         maintenance_mode=False,
         maintenance_start="02:00",
         maintenance_end="05:00",

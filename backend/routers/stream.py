@@ -76,7 +76,7 @@ async def process_frame(
 
     # ---- Face recognition ----
     from database import SessionLocal
-    from services.face_recognition_service import recognise_faces, embedding_from_bytes
+    from services.face_recognition_service import recognise_faces, embeddings_from_bytes
     from services.rule_engine import get_settings, process_detection
     from services.alert_dispatcher import dispatch_alert
     from models.staff import Staff
@@ -87,20 +87,21 @@ async def process_frame(
         settings = get_settings(db)
         threshold = settings.rules.confidence_threshold
 
-        # Load enrolled staff embeddings
+        # Load enrolled staff embeddings (multi-embedding aware)
         rows = db.query(Staff).filter(
             Staff.status == "Active",
             Staff.face_embedding.isnot(None),
         ).all()
-        enrolled = []
+        enrolled_multi = []
         for r in rows:
             try:
-                enc = embedding_from_bytes(r.face_embedding)
-                enrolled.append((r.name, enc))
+                embs = embeddings_from_bytes(r.face_embedding)
+                if embs:
+                    enrolled_multi.append((r.name, embs))
             except Exception:
                 pass
 
-        boxes = recognise_faces(img_bgr, enrolled, threshold)
+        boxes = recognise_faces(img_bgr, enrolled=[], threshold=threshold, enrolled_multi=enrolled_multi)
 
         # Run rule engine on each detected face
         for box in boxes:

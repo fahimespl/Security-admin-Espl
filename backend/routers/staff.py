@@ -9,7 +9,7 @@ DELETE /api/staff/{id}       — remove staff member and their stored photo
 import os
 import uuid
 from datetime import date
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
@@ -18,7 +18,7 @@ from database import get_db
 from middleware.auth import require_api_key
 from models.staff import Staff
 from schemas.staff import StaffOut
-from services.face_recognition_service import compute_embedding
+from services.face_recognition_service import compute_embedding, compute_embeddings_multi
 from services.storage_service import upload_photo, delete_photo
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -57,24 +57,36 @@ async def create_staff(
     role: str = Form(...),
     status: str = Form("Active"),
     photo: UploadFile = File(None),
+    photos: List[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
     staff_id = f"s-{uuid.uuid4().hex[:8]}"
     photo_path = None
     embedding = None
 
+    # Collect all uploaded files (single `photo` field + optional `photos` list)
+    all_files: List[UploadFile] = []
     if photo and photo.filename:
-        ext = os.path.splitext(photo.filename)[1] or ".jpg"
-        filename = f"{staff_id}{ext}"
-        contents = await photo.read()
+        all_files.append(photo)
+    if photos:
+        all_files.extend([p for p in photos if p and p.filename])
 
-        # Upload via storage service (Supabase or local disk)
-        photo_path = upload_photo(contents, filename)
+    all_contents: List[bytes] = []
+    primary_contents: Optional[bytes] = None
 
-        # Compute face embedding for recognition
-        embedding = compute_embedding(contents)
-        # embedding may be None if no face detected — staff is saved but won't
-        # be matched until re-enrolled with a clearer photo.
+    for idx, f in enumerate(all_files):
+        contents = await f.read()
+        all_contents.append(contents)
+        if idx == 0:
+            primary_contents = contents
+            ext = os.path.splitext(f.filename)[1] or ".jpg"
+            filename = f"{staff_id}{ext}"
+            photo_path = upload_photo(contents, filename)
+
+    if all_contents:
+        # compute_embeddings_multi accepts multiple photos and concatenates
+        # all valid embeddings for best recognition coverage.
+        embedding = compute_embeddings_multi(all_contents, num_jitters=10)
 
     row = Staff(
         id=staff_id,
@@ -123,8 +135,8 @@ async def update_staff(
         # Upload the new photo
         row.photo_path = upload_photo(contents, filename)
 
-        # Re-compute face embedding from the new photo
-        embedding = compute_embedding(contents)
+        # Re-compute face embedding from the new photo (num_jitters=10 for quality)
+        embedding = compute_embeddings_multi([contents], num_jitters=10)
         if embedding is not None:
             row.face_embedding = embedding
 
@@ -152,7 +164,8 @@ async def check_face(photo: UploadFile = File(...)):
     """Dry-run endpoint to verify if a face is detectable in the uploaded photo."""
     try:
         contents = await photo.read()
-        embedding = compute_embedding(contents)
+        # Use num_jitters=1 here — this is a quick UI feedback call, not enrollment
+        embedding = compute_embedding(contents, num_jitters=1)
         return {"faceDetected": embedding is not None}
     except Exception:
         return {"faceDetected": False}
