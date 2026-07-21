@@ -123,6 +123,48 @@ def _dist_to_conf(distance: float) -> float:
 # Public API
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def fast_face_present(image_bytes: bytes) -> bool:
+    """
+    Quick yes/no check: does the image contain at least one detectable face?
+
+    Much faster than compute_embedding() because it:
+      - Resizes to a max of 400 px (vs 1000 px)
+      - Calls face_locations only (no face_encodings — skips the 128-d embedding step)
+      - Uses upsample=1 (vs 2)
+
+    Falls back to OpenCV Haar cascade when dlib is unavailable.
+    Returns True if at least one face is found, False otherwise.
+    """
+    if not CV2_AVAILABLE:
+        return False
+
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+
+    # Small resize — plenty for detection
+    max_side = 400
+    h, w = img.shape[:2]
+    if max(h, w) > max_side:
+        scale = max_side / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+    if FACE_REC_AVAILABLE:
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        locs = fr.face_locations(rgb, number_of_times_to_upsample=1, model=FACE_MODEL)
+        return len(locs) > 0
+
+    # Haar fallback
+    if _CASCADE_PATH and os.path.exists(_CASCADE_PATH):
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        cascade = cv2.CascadeClassifier(_CASCADE_PATH)
+        rects = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+        return len(rects) > 0
+
+    return False
+
+
 def compute_embedding(image_bytes: bytes, num_jitters: int = 10) -> Optional[bytes]:
     """
     Given a JPEG/PNG image as bytes, detect the face and return the 128-d

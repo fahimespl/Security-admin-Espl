@@ -18,7 +18,7 @@ from database import get_db
 from middleware.auth import require_api_key
 from models.staff import Staff
 from schemas.staff import StaffOut
-from services.face_recognition_service import compute_embedding, compute_embeddings_multi
+from services.face_recognition_service import compute_embedding, compute_embeddings_multi, fast_face_present
 from services.storage_service import upload_photo, delete_photo
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -161,11 +161,13 @@ def delete_staff(staff_id: str, db: Session = Depends(get_db)):
 
 @router.post("/check-face")
 async def check_face(photo: UploadFile = File(...)):
-    """Dry-run endpoint to verify if a face is detectable in the uploaded photo."""
+    """Dry-run endpoint: fast yes/no check whether a face is visible in the photo.
+
+    Uses a lightweight detection-only path (no encodings, small resize) so the
+    UI gets feedback in ~0.3 s instead of the 3-5 s full-embedding call.
+    """
     try:
         contents = await photo.read()
-        # Use num_jitters=1 here — this is a quick UI feedback call, not enrollment
-        embedding = compute_embedding(contents, num_jitters=1)
-        return {"faceDetected": embedding is not None}
+        return {"faceDetected": fast_face_present(contents)}
     except Exception:
         return {"faceDetected": False}

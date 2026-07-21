@@ -49,40 +49,58 @@ export function StaffForm({
     }
   }, [open, initial])
 
+  const abortRef = useRef<AbortController | null>(null)
+
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
+
+    // Cancel any previous in-flight check
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
     setPhotoFile(file)
-    
-    // Local preview
+    setFaceStatus('idle')
+
+    // Show preview immediately — don't wait for the server
     const reader = new FileReader()
     reader.onload = () => setPhoto(reader.result as string)
     reader.readAsDataURL(file)
+
+    // Small debounce: skip the spinner flash on fast connections
+    await new Promise((r) => setTimeout(r, 200))
+    if (controller.signal.aborted) return
 
     // Server-side face check
     setFaceStatus('checking')
     const form = new FormData()
     form.append('photo', file, file.name)
-    
+
     try {
       const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000'
       const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? ''
       const res = await fetch(`${API}/api/staff/check-face`, {
         method: 'POST',
         headers: { 'X-API-Key': API_KEY },
-        body: form
+        body: form,
+        signal: controller.signal,
       })
-      
+
       if (res.ok) {
         const data = await res.json()
         setFaceStatus(data.faceDetected ? 'detected' : 'not-detected')
       } else {
         setFaceStatus('idle')
       }
-    } catch {
-      setFaceStatus('idle')
+    } catch (err: unknown) {
+      // AbortError = user picked a new file, just ignore
+      if (err instanceof Error && err.name !== 'AbortError') {
+        setFaceStatus('idle')
+      }
     }
   }
+
 
   function submit() {
     if (!name.trim()) {
